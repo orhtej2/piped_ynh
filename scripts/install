@@ -1,24 +1,18 @@
 #!/bin/bash
 
-#=================================================
-# GENERIC START
-#=================================================
-# IMPORT GENERIC HELPERS
-#=================================================
 source _common.sh
 source /usr/share/yunohost/helpers
 
 #=================================================
 # INSTALL DEPENDENCIES
 #=================================================
-ynh_script_progression --message="Installing dependencies..." --weight=3
+ynh_script_progression "Installing dependencies..."
 
-ynh_install_nodejs --nodejs_version=$NODEJS_VERSION
-ynh_use_nodejs
+ynh_nodejs_install
 
 ynh_setup_source --dest_dir="$install_dir/jdk" --source_id="jdk"
 
-ynh_exec_warn_less ynh_exec_as $app RUSTUP_HOME="$install_dir"/.rustup CARGO_HOME="$install_dir"/.cargo bash -c 'curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y'
+ynh_hide_warnings ynh_exec_as_app RUSTUP_HOME="$install_dir"/.rustup CARGO_HOME="$install_dir"/.cargo bash -c 'curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y'
 export PATH="$install_dir/jdk/bin:$install_dir/.cargo/bin:$PATH"
 
 #=================================================
@@ -26,7 +20,7 @@ export PATH="$install_dir/jdk/bin:$install_dir/.cargo/bin:$PATH"
 #=================================================
 # DOWNLOAD, CHECK AND UNPACK SOURCE
 #=================================================
-ynh_script_progression --message="Setting up source files..."
+ynh_script_progression "Setting up source files..."
 
 ynh_setup_source --dest_dir="$install_dir/build"
 
@@ -34,21 +28,20 @@ ynh_setup_source --dest_dir="$install_dir/build_api" --source_id="api"
 
 ynh_setup_source --dest_dir="$install_dir/build_proxy" --source_id="proxy"
 
-chown -R $app:www-data "$install_dir"
-
+#REMOVEME? Assuming the install dir is setup using ynh_setup_source, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chown -R $app:www-data "$install_dir"
 #=================================================
 # INSTALL APP
 #=================================================
-ynh_script_progression --message="Building UI..." --weight=5
+ynh_script_progression "Building UI..."
 
 pushd $install_dir/build
-    env $ynh_node_load_PATH corepack enable
-    env $ynh_node_load_PATH corepack prepare pnpm@latest --activate
-    ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH corepack enable
-    ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH corepack prepare pnpm@latest --activate
-    ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH pnpm install
-    ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH NODE_ENV=production pnpm build
-    ynh_exec_warn_less ynh_exec_as $app ./localizefonts.sh
+    env node_load_PATH corepack enable
+    env node_load_PATH corepack prepare pnpm@latest --activate
+    ynh_hide_warnings ynh_exec_as_app node_load_PATH corepack enable
+    ynh_hide_warnings ynh_exec_as_app node_load_PATH corepack prepare pnpm@latest --activate
+    ynh_hide_warnings ynh_exec_as_app node_load_PATH pnpm install
+    ynh_hide_warnings ynh_exec_as_app node_load_PATH NODE_ENV=production pnpm build
+    ynh_hide_warnings ynh_exec_as_app ./localizefonts.sh
 popd
 
 mv $install_dir/build/dist $install_dir
@@ -58,72 +51,70 @@ popd
 chown -R $app:www-data "$install_dir/dist"
 chmod -R 755 "$install_dir/dist"
 
-ynh_secure_remove --file="$install_dir/build"
-ynh_secure_remove --file="$install_dir/.local"
-ynh_secure_remove --file="$install_dir/.cache"
+ynh_safe_rm "$install_dir/build"
+ynh_safe_rm "$install_dir/.local"
+ynh_safe_rm "$install_dir/.cache"
 
-ynh_script_progression --message="Building API..." --weight=5
+ynh_script_progression "Building API..."
 
 pushd $install_dir/build_api
-    ynh_exec_warn_less ynh_exec_as $app JAVA_HOME=$install_dir/jdk ./gradlew shadowJar
-    ynh_exec_warn_less ynh_exec_as $app JAVA_HOME=$install_dir/jdk ./gradlew --stop
+    ynh_hide_warnings ynh_exec_as_app JAVA_HOME=$install_dir/jdk ./gradlew shadowJar
+    ynh_hide_warnings ynh_exec_as_app JAVA_HOME=$install_dir/jdk ./gradlew --stop
 popd
 
 mv $install_dir/build_api/build/libs/piped-1.0-all.jar $install_dir/piped.jar
-ynh_add_config --template="config.properties" --destination="$install_dir/config.properties"
-chown $app:$app "$install_dir/config.properties"
-chmod 600 "$install_dir/config.properties"
-ynh_secure_remove --file="$install_dir/.gradle"
-ynh_secure_remove --file="$install_dir/build_api"
+ynh_config_add --template="config.properties" --destination="$install_dir/config.properties"
+#REMOVEME? Assuming the file is setup using ynh_config_add, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chown $app:$app "$install_dir/config.properties"
+#REMOVEME? Assuming the file is setup using ynh_config_add, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chmod 600 "$install_dir/config.properties"
+ynh_safe_rm "$install_dir/.gradle"
+ynh_safe_rm "$install_dir/build_api"
 
-ynh_script_progression --message="Building Proxy..." --weight=5
+ynh_script_progression "Building Proxy..."
 
 pushd $install_dir/build_proxy
-    ynh_exec_warn_less ynh_exec_as $app env PATH=$PATH cargo build --release
+    ynh_hide_warnings ynh_exec_as_app PATH=$PATH cargo build --release
 popd
 
 mv $install_dir/build_proxy/target/release/piped-proxy $install_dir
-ynh_secure_remove --file="$install_dir/.rustup"
-ynh_secure_remove --file="$install_dir/.cargo"
-ynh_secure_remove --file="$install_dir/build_proxy"
+ynh_safe_rm "$install_dir/.rustup"
+ynh_safe_rm "$install_dir/.cargo"
+ynh_safe_rm "$install_dir/build_proxy"
 
 #=================================================
 # SYSTEM CONFIGURATION
 #=================================================
-ynh_script_progression --message="Adding system configurations related to $app..." --weight=1
+ynh_script_progression "Adding system configurations related to $app..."
 
-ynh_add_nginx_config
+ynh_config_add_nginx
 
 ### systemd
 
 mkdir -p "/var/log/$app"
 touch "/var/log/$app/$app-api.log"
 touch "/var/log/$app/$app-proxy.log"
-chown -R "$app:" "/var/log/$app"
-chmod 640 "/var/log/$app"
+#REMOVEME? Assuming ynh_config_add_logrotate is called, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chown -R "$app:" "/var/log/$app"
+#REMOVEME? Assuming ynh_config_add_logrotate is called, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chmod 640 "/var/log/$app"
 
-ynh_use_logrotate --logfile="/var/log/$app/$app-api.log"
-ynh_use_logrotate --logfile="/var/log/$app/$app-proxy.log"
+ynh_config_add_logrotate "/var/log/$app/$app-api.log"
+ynh_config_add_logrotate "/var/log/$app/$app-proxy.log"
 
-ynh_add_systemd_config --template="api.service" --service="$app-api"
+ynh_config_add_systemd --template="api.service" --service="$app-api"
 yunohost service add "$app-api" --description="Piped backend API service" --log="/var/log/$app/$app-api.log"
 
-ynh_add_systemd_config --template="proxy.service" --service="$app-proxy"
+ynh_config_add_systemd --template="proxy.service" --service="$app-proxy"
 yunohost service add "$app-proxy" --description="Piped HTTP proxy service" --log="/var/log/$app/$app-proxy.log"
 
 #=================================================
-# GENERIC FINALIZATION
-#=================================================
 # START SYSTEMD SERVICE
 #=================================================
-ynh_script_progression --message="Starting a systemd service..." --weight=1
+ynh_script_progression "Starting $app's systemd service..."
 
 # Start a systemd service
-ynh_systemd_action --service_name=$app-api --action="start" --log_path="/var/log/$app/$app-api.log" --line_match="Database connection is ready!"
+ynh_systemctl --service=$app-api --action="start" --log_path="/var/log/$app/$app-api.log" --wait_until="Database connection is ready!"
 
-ynh_systemd_action --service_name=$app-proxy --action="start" --log_path="/var/log/$app/$app-proxy.log" --line_match="Running server!"
+ynh_systemctl --service=$app-proxy --action="start" --log_path="/var/log/$app/$app-proxy.log" --wait_until="Running server!"
 
 #=================================================
 # END OF SCRIPT
 #=================================================
-ynh_script_progression --message="Installation of $app completed" --last
+ynh_script_progression "Installation of $app completed"

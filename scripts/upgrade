@@ -1,31 +1,21 @@
 #!/bin/bash
 
-#=================================================
-# GENERIC START
-#=================================================
-# IMPORT GENERIC HELPERS
-#=================================================
-
 source _common.sh
 source /usr/share/yunohost/helpers
 
-upgrade_type=$(ynh_check_app_version_changed)
-
-#=================================================
-# STANDARD UPGRADE STEPS
 #=================================================
 # ENSURE DOWNWARD COMPATIBILITY
 #=================================================
 
-chmod 640 "/var/log/$app"
+#REMOVEME? Assuming ynh_config_add_logrotate is called, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chmod 640 "/var/log/$app"
 
 #=================================================
 # STOP SYSTEMD SERVICE
 #=================================================
-ynh_script_progression --message="Stopping a systemd service..."
+ynh_script_progression "Stopping $app's systemd service..."
 
-ynh_systemd_action --service_name=$app-api --action="stop" --log_path="/var/log/$app/$app-api.log"
-ynh_systemd_action --service_name=$app-proxy --action="stop"
+ynh_systemctl --service=$app-api --action="stop" --log_path="/var/log/$app/$app-api.log"
+ynh_systemctl --service=$app-proxy --action="stop"
 
 #=================================================
 # "REBUILD" THE APP (DEPLOY NEW SOURCES, RERUN NPM BUILD...)
@@ -33,19 +23,19 @@ ynh_systemd_action --service_name=$app-proxy --action="stop"
 # DOWNLOAD, CHECK AND UNPACK SOURCE
 #=================================================
 
-if [ "$upgrade_type" == "UPGRADE_APP" ]
+# FIXME: this is still supported but the recommendation is now to *always* re-setup the app sources wether or not the upstream sources changed
+if ynh_app_upstream_version_changed
 then
-    ynh_script_progression --message="Installing dependencies..." --weight=3
+    ynh_script_progression "Installing dependencies..."
 
-    ynh_install_nodejs --nodejs_version=$NODEJS_VERSION
-    ynh_use_nodejs
+    ynh_nodejs_install
 
-    ynh_setup_source --dest_dir="$install_dir/jdk" --source_id="jdk" --full_replace=1
+    ynh_setup_source --dest_dir="$install_dir/jdk" --source_id="jdk" --full_replace
 
-    ynh_exec_warn_less ynh_exec_as $app RUSTUP_HOME="$install_dir"/.rustup CARGO_HOME="$install_dir"/.cargo bash -c 'curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y'
+    ynh_hide_warnings ynh_exec_as_app RUSTUP_HOME="$install_dir"/.rustup CARGO_HOME="$install_dir"/.cargo bash -c 'curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y'
     export PATH="$install_dir/jdk/bin:$install_dir/.cargo/bin:$PATH"
 
-    ynh_script_progression --message="Setting up source files..."
+    ynh_script_progression "Setting up source files..."
 
     ynh_setup_source --dest_dir="$install_dir/build"
 
@@ -53,22 +43,21 @@ then
 
     ynh_setup_source --dest_dir="$install_dir/build_proxy" --source_id="proxy"
 
-    chown -R $app:www-data "$install_dir"
-    chmod -R 755 "$install_dir"
-
-    ynh_script_progression --message="Building UI..." --weight=5
+    #REMOVEME? Assuming the install dir is setup using ynh_setup_source, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chown -R $app:www-data "$install_dir"
+    #REMOVEME? Assuming the install dir is setup using ynh_setup_source, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chmod -R 755 "$install_dir"
+    ynh_script_progression "Building UI..."
 
     pushd $install_dir/build
-        env $ynh_node_load_PATH corepack enable
-        env $ynh_node_load_PATH corepack prepare pnpm@latest --activate
-        ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH corepack enable
-        ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH corepack prepare pnpm@latest --activate
-        ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH pnpm install
-        ynh_exec_warn_less ynh_exec_as $app env $ynh_node_load_PATH NODE_ENV=production pnpm build
-        ynh_exec_warn_less ynh_exec_as $app ./localizefonts.sh
+        env node_load_PATH corepack enable
+        env node_load_PATH corepack prepare pnpm@latest --activate
+        ynh_hide_warnings ynh_exec_as_app node_load_PATH corepack enable
+        ynh_hide_warnings ynh_exec_as_app node_load_PATH corepack prepare pnpm@latest --activate
+        ynh_hide_warnings ynh_exec_as_app node_load_PATH pnpm install
+        ynh_hide_warnings ynh_exec_as_app node_load_PATH NODE_ENV=production pnpm build
+        ynh_hide_warnings ynh_exec_as_app ./localizefonts.sh
     popd
 
-    ynh_secure_remove --file="$install_dir/dist"
+    ynh_safe_rm "$install_dir/dist"
     mv $install_dir/build/dist $install_dir
     pushd $install_dir/dist
         sed -i s/pipedapi.kavin.rocks/"$domain\\/api"/g assets/*
@@ -76,46 +65,46 @@ then
     chown -R $app:www-data "$install_dir/dist"
     chmod -R 755 "$install_dir/dist"
 
-    ynh_secure_remove --file="$install_dir/build"
-    ynh_secure_remove --file="$install_dir/.local"
-    ynh_secure_remove --file="$install_dir/.cache"
+    ynh_safe_rm "$install_dir/build"
+    ynh_safe_rm "$install_dir/.local"
+    ynh_safe_rm "$install_dir/.cache"
 
-    ynh_script_progression --message="Building API..." --weight=5
+    ynh_script_progression "Building API..."
 
     pushd $install_dir/build_api
-        ynh_exec_warn_less ynh_exec_as $app JAVA_HOME=$install_dir/jdk ./gradlew shadowJar
-        ynh_exec_warn_less ynh_exec_as $app JAVA_HOME=$install_dir/jdk ./gradlew --stop
+        ynh_hide_warnings ynh_exec_as_app JAVA_HOME=$install_dir/jdk ./gradlew shadowJar
+        ynh_hide_warnings ynh_exec_as_app JAVA_HOME=$install_dir/jdk ./gradlew --stop
     popd
 
-    ynh_secure_remove --file="$install_dir/piped.jar"
+    ynh_safe_rm "$install_dir/piped.jar"
     mv $install_dir/build_api/build/libs/piped-1.0-all.jar $install_dir/piped.jar
-    ynh_secure_remove --file="$install_dir/build_api"
-    ynh_secure_remove --file="$install_dir/.gradle"
+    ynh_safe_rm "$install_dir/build_api"
+    ynh_safe_rm "$install_dir/.gradle"
 
-    ynh_script_progression --message="Building Proxy..." --weight=5
+    ynh_script_progression "Building Proxy..."
 
     pushd $install_dir/build_proxy
-        ynh_exec_warn_less ynh_exec_as $app env PATH=$PATH cargo build --release
+        ynh_hide_warnings ynh_exec_as_app PATH=$PATH cargo build --release
     popd
 
-    ynh_secure_remove --file="$install_dir/piped-proxy"
+    ynh_safe_rm "$install_dir/piped-proxy"
     mv $install_dir/build_proxy/target/release/piped-proxy $install_dir
-    ynh_secure_remove --file="$install_dir/.rustup"
-    ynh_secure_remove --file="$install_dir/.cargo"
-    ynh_secure_remove --file="$install_dir/build_proxy"
+    ynh_safe_rm "$install_dir/.rustup"
+    ynh_safe_rm "$install_dir/.cargo"
+    ynh_safe_rm "$install_dir/build_proxy"
 fi
 
 #=================================================
 # REAPPLY SYSTEM CONFIGURATIONS
 #=================================================
-ynh_script_progression --message="Upgrading system configurations related to $app..."
+ynh_script_progression "Upgrading system configurations related to $app..."
 
-ynh_add_nginx_config
+ynh_config_add_nginx
 
-ynh_add_systemd_config --template="api.service" --service="$app-api"
+ynh_config_add_systemd --template="api.service" --service="$app-api"
 yunohost service add "$app-api" --description="Piped backend API service" --log="/var/log/$app/$app-api.log"
 
-ynh_add_systemd_config --template="proxy.service" --service="$app-proxy"
+ynh_config_add_systemd --template="proxy.service" --service="$app-proxy"
 yunohost service add "$app-proxy" --description="Piped HTTP proxy service" --log="/var/log/$app/$app-proxy.log"
 
 #=================================================
@@ -123,24 +112,24 @@ yunohost service add "$app-proxy" --description="Piped HTTP proxy service" --log
 #=================================================
 # UPDATE A CONFIG FILE
 #=================================================
-ynh_script_progression --message="Updating a configuration file..."
+ynh_script_progression "Updating configuration..."
 
-ynh_add_config --template="config.properties" --destination="$install_dir/config.properties"
-chown $app:$app "$install_dir/config.properties"
-chmod 600 "$install_dir/config.properties"
+ynh_config_add --template="config.properties" --destination="$install_dir/config.properties"
+#REMOVEME? Assuming the file is setup using ynh_config_add, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chown $app:$app "$install_dir/config.properties"
+#REMOVEME? Assuming the file is setup using ynh_config_add, the proper chmod/chowns are now already applied and it shouldn't be necessary to tweak perms | chmod 600 "$install_dir/config.properties"
 
 #=================================================
 # START SYSTEMD SERVICE
 #=================================================
-ynh_script_progression --message="Starting a systemd service..."
+ynh_script_progression "Starting $app's systemd service..."
 
 # Start a systemd service
-ynh_systemd_action --service_name=$app-api --action="start" --log_path="/var/log/$app/$app-api.log" --line_match="Database connection is ready!"
+ynh_systemctl --service=$app-api --action="start" --log_path="/var/log/$app/$app-api.log" --wait_until="Database connection is ready!"
 
-ynh_systemd_action --service_name=$app-proxy --action="start" --log_path="/var/log/$app/$app-proxy.log" --line_match="Running server!"
+ynh_systemctl --service=$app-proxy --action="start" --log_path="/var/log/$app/$app-proxy.log" --wait_until="Running server!"
 
 #=================================================
 # END OF SCRIPT
 #=================================================
 
-ynh_script_progression --message="Upgrade of $app completed" --last
+ynh_script_progression "Upgrade of $app completed"
